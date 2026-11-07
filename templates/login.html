@@ -1,1 +1,68 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ورود — پنل مدیریت</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    background: #1a1a2e;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .box {
+    background: #16213e;
+    border: 1px solid rgba(201,168,76,.3);
+    border-radius: 16px;
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 380px;
+    text-align: center;
+  }
+  .box h1 { color: #c9a84c; font-size: 1.5rem; margin-bottom: .4rem; }
+  .box p  { color: #888; font-size: .9rem; margin-bottom: 1.5rem; }
+  input {
+    width: 100%; padding: .75rem 1rem;
+    background: #0f3460; border: 1px solid #333;
+    border-radius: 10px; color: #e0e0e0;
+    font-size: 1rem; margin-bottom: 1rem;
+    outline: none; text-align: center;
+    letter-spacing: 2px;
+  }
+  input:focus { border-color: #c9a84c; }
+  button {
+    width: 100%; padding: .8rem;
+    background: #c9a84c; color: #000;
+    border: none; border-radius: 10px;
+    font-size: 1rem; font-weight: 700;
+    cursor: pointer; transition: opacity .2s;
+  }
+  button:hover { opacity: .88; }
+  .flash { margin-bottom: 1rem; padding: .6rem 1rem; border-radius: 8px;
+    background: rgba(231,76,60,.15); border: 1px solid #e74c3c; color: #e74c3c; font-size: .88rem; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div style="font-size:3rem;margin-bottom:.5rem">🥇</div>
+  <h1>پنل مدیریت</h1>
+  <p>رمز عبور را وارد کنید</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for _, msg in messages %}
+      <div class="flash">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <form method="POST">
+    <input type="password" name="password" placeholder="••••••••" autofocus>
+    <button type="submit">ورود ←</button>
+  </form>
+</div>
+</body>
+</html>
 
