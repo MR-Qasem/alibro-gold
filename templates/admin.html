@@ -1,1 +1,328 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>پنل مدیریت — طلا‌فروشی</title>
+<style>
+  :root {
+    --gold: #c9a84c;
+    --gold-light: #f0d080;
+    --dark: #1a1a2e;
+    --card: #16213e;
+    --card2: #0f3460;
+    --text: #e0e0e0;
+    --green: #2ecc71;
+    --red: #e74c3c;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--dark); color: var(--text); min-height: 100vh; }
+
+  /* ── Navbar ── */
+  nav {
+    background: var(--card);
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid var(--gold);
+    position: sticky; top: 0; z-index: 100;
+  }
+  nav h1 { color: var(--gold); font-size: 1.3rem; }
+  nav a { color: var(--text); text-decoration: none; padding: .4rem .8rem; border-radius: 8px; transition: background .2s; }
+  nav a:hover { background: var(--card2); }
+
+  /* ── Layout ── */
+  .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media(max-width:768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    border: 1px solid rgba(201,168,76,.2);
+  }
+  .card h2 { color: var(--gold); margin-bottom: 1rem; font-size: 1.1rem; display: flex; align-items: center; gap: .5rem; }
+
+  /* ── Gold Price Grid ── */
+  .price-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: .8rem; }
+  .price-item { background: var(--card2); border-radius: 8px; padding: .8rem; text-align: center; }
+  .price-item .label { font-size: .75rem; color: #aaa; margin-bottom: .3rem; }
+  .price-item .value { font-size: 1rem; font-weight: bold; color: var(--gold-light); }
+  .price-item .change { font-size: .8rem; margin-top: .2rem; }
+  .up { color: var(--green); } .down { color: var(--red); }
+
+  /* ── Form ── */
+  .form-group { margin-bottom: 1rem; }
+  .form-group label { display: block; margin-bottom: .4rem; font-size: .9rem; color: #bbb; }
+  input, select, textarea {
+    width: 100%; padding: .6rem .9rem;
+    background: var(--dark); border: 1px solid #333;
+    border-radius: 8px; color: var(--text); font-size: .95rem;
+    outline: none; transition: border .2s;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--gold); }
+  textarea { min-height: 80px; resize: vertical; }
+  .btn {
+    padding: .6rem 1.4rem; border-radius: 8px; border: none;
+    cursor: pointer; font-size: .95rem; font-weight: 600;
+    transition: opacity .2s, transform .1s;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn:hover  { opacity: .88; }
+  .btn-gold   { background: var(--gold); color: #000; }
+  .btn-red    { background: var(--red);  color: #fff; }
+  .btn-green  { background: var(--green); color: #000; }
+  .btn-sm { padding: .35rem .8rem; font-size: .82rem; }
+
+  /* ── Upload preview ── */
+  #preview-wrap { margin-top: .6rem; display: none; }
+  #preview-wrap img { max-height: 120px; border-radius: 8px; border: 2px solid var(--gold); }
+
+  /* ── Products table ── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th { background: var(--card2); color: var(--gold); padding: .7rem .8rem; text-align: right; }
+  td { padding: .6rem .8rem; border-bottom: 1px solid #222; vertical-align: middle; }
+  tr:hover td { background: rgba(255,255,255,.03); }
+  .thumb { width: 50px; height: 50px; object-fit: cover; border-radius: 6px; }
+  .badge { display: inline-block; padding: .2rem .6rem; border-radius: 20px; font-size: .75rem; }
+  .badge-cat { background: rgba(201,168,76,.2); color: var(--gold-light); }
+
+  /* ── Flash messages ── */
+  .flash { padding: .8rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
+  .flash.success { background: rgba(46,204,113,.15); border: 1px solid var(--green); color: var(--green); }
+  .flash.error   { background: rgba(231,76,60,.15);  border: 1px solid var(--red);  color: var(--red); }
+
+  /* ── Empty state ── */
+  .empty { text-align: center; padding: 2rem; color: #666; }
+</style>
+</head>
+<body>
+
+<nav>
+  <h1>🥇 پنل مدیریت طلا‌فروشی</h1>
+  <div style="display:flex;gap:.5rem;align-items:center">
+    <span id="clock" style="color:#aaa;font-size:.85rem"></span>
+    <a href="/logout">خروج 🚪</a>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash {{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <!-- قیمت طلا -->
+  <div class="card" style="margin-bottom:1.5rem">
+    <h2>💰 قیمت لحظه‌ای
+      <button class="btn btn-gold btn-sm" onclick="refreshGold()" style="margin-right:auto">🔄 بروزرسانی</button>
+    </h2>
+    <div class="price-grid" id="price-grid">
+      {% if prices %}
+        {% set items = [
+          ('گرم ۱۸ عیار', 'geram18'),
+          ('گرم ۲۴ عیار', 'geram24'),
+          ('مثقال',       'mithqal'),
+          ('سکه تمام',    'sekeb'),
+          ('نیم سکه',     'nim'),
+          ('ربع سکه',     'rob'),
+          ('اونس',        'ounce'),
+          ('دلار',        'usd'),
+        ] %}
+        {% for label, key in items %}
+          {% if prices[key] is defined %}
+          <div class="price-item">
+            <div class="label">{{ label }}</div>
+            <div class="value">{{ prices[key][0] }}</div>
+            <div class="change {% if prices[key][1] > 0 %}up{% elif prices[key][1] < 0 %}down{% endif %}">
+              {% if prices[key][1] > 0 %}🔺{% elif prices[key][1] < 0 %}🔻{% else %}➖{% endif %}
+            </div>
+          </div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <p style="color:#aaa">قیمت در دسترس نیست</p>
+      {% endif %}
+    </div>
+    {% if prices %}<p style="font-size:.78rem;color:#666;margin-top:.7rem">آخرین بروزرسانی: {{ prices.time }}</p>{% endif %}
+  </div>
+
+  <div class="grid-2">
+
+    <!-- فرم افزودن محصول -->
+    <div class="card">
+      <h2>➕ افزودن محصول جدید</h2>
+      <form method="POST" action="/admin/add" enctype="multipart/form-data">
+
+        <div class="form-group">
+          <label>نام محصول *</label>
+          <input name="name" placeholder="مثلاً: النگو طلا ۱۸ عیار" required>
+        </div>
+
+        <div class="form-group">
+          <label>دسته‌بندی موجود</label>
+          <select name="category">
+            <option value="">— انتخاب کنید —</option>
+            {% for cat in categories %}
+              <option value="{{ cat }}">{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>یا دسته‌بندی جدید بسازید</label>
+          <input name="new_category" placeholder="مثلاً: النگو، انگشتر، گردنبند">
+        </div>
+
+        <div class="form-group">
+          <label>قیمت (تومان) *</label>
+          <input name="price" placeholder="مثلاً: 25,000,000" required>
+        </div>
+
+        <div class="form-group">
+          <label>توضیحات</label>
+          <textarea name="description" placeholder="وزن، عیار، ویژگی‌های خاص..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>تصویر محصول</label>
+          <input type="file" name="image" accept="image/*" id="img-input" onchange="previewImage(this)">
+          <div id="preview-wrap"><img id="preview-img" src=""></div>
+        </div>
+
+        <button type="submit" class="btn btn-gold" style="width:100%">✅ ذخیره محصول</button>
+      </form>
+    </div>
+
+    <!-- آمار سریع -->
+    <div class="card">
+      <h2>📊 آمار</h2>
+      <div class="price-grid" style="grid-template-columns:1fr 1fr">
+        <div class="price-item">
+          <div class="label">کل محصولات</div>
+          <div class="value" style="font-size:1.8rem">{{ products|length }}</div>
+        </div>
+        <div class="price-item">
+          <div class="label">دسته‌بندی‌ها</div>
+          <div class="value" style="font-size:1.8rem">{{ categories|length }}</div>
+        </div>
+      </div>
+
+      <hr style="border-color:#333;margin:1rem 0">
+      <h2 style="margin-bottom:.7rem">📢 ارسال به کانال</h2>
+      <p style="font-size:.85rem;color:#aaa;margin-bottom:.8rem">
+        برای ارسال یک محصول به کانال بله، از جدول پایین دکمه "ارسال" را بزنید.
+      </p>
+      <div style="background:var(--card2);border-radius:8px;padding:.8rem;font-size:.82rem;color:#aaa">
+        💡 ربات هر ۱۵ دقیقه قیمت طلا را به کانال می‌فرستد
+      </div>
+    </div>
+
+  </div><!-- /grid-2 -->
+
+  <!-- جدول محصولات -->
+  <div class="card" style="margin-top:1.5rem">
+    <h2>🛒 محصولات ({{ products|length }})</h2>
+    {% if products %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>تصویر</th>
+            <th>نام</th>
+            <th>دسته</th>
+            <th>قیمت</th>
+            <th>توضیحات</th>
+            <th>عملیات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr>
+            <td>
+              {% if p.image_url %}
+                <img src="{{ p.image_url }}" class="thumb" onerror="this.style.display='none'">
+              {% else %}
+                <span style="color:#555">—</span>
+              {% endif %}
+            </td>
+            <td><strong>{{ p.name }}</strong></td>
+            <td><span class="badge badge-cat">{{ p.category }}</span></td>
+            <td style="color:var(--gold-light)">{{ p.price }}</td>
+            <td style="max-width:200px;color:#aaa;font-size:.82rem">{{ p.description[:60] }}{% if p.description|length > 60 %}...{% endif %}</td>
+            <td>
+              <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+                <!-- ارسال به کانال -->
+                <form method="POST" action="/admin/send" style="display:inline">
+                  <input type="hidden" name="id" value="{{ p.id }}">
+                  <button type="submit" class="btn btn-green btn-sm" title="ارسال به کانال بله">📢</button>
+                </form>
+                <!-- حذف -->
+                <form method="POST" action="/admin/delete" style="display:inline"
+                      onsubmit="return confirm('آیا مطمئن هستید؟')">
+                  <input type="hidden" name="id" value="{{ p.id }}">
+                  <button type="submit" class="btn btn-red btn-sm">🗑</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty">❌ هنوز محصولی اضافه نشده است</div>
+    {% endif %}
+  </div>
+
+</div><!-- /container -->
+
+<script>
+// ساعت
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('fa-IR');
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// پیش‌نمایش تصویر
+function previewImage(input) {
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      document.getElementById('preview-img').src = e.target.result;
+      document.getElementById('preview-wrap').style.display = 'block';
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+}
+
+// بروزرسانی قیمت طلا با AJAX
+async function refreshGold() {
+  const btn = event.target;
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/gold');
+    const data = await res.json();
+    if (data) location.reload();
+  } catch(e) {
+    alert('خطا در دریافت قیمت');
+  }
+  btn.textContent = '🔄 بروزرسانی';
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
 
