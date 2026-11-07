@@ -8,7 +8,8 @@
   POST /admin/send     → ارسال محصول به کانال بله
   GET  /admin/gold     → نمایش قیمت طلا لحظه‌ای
 """
-
+import cloudinary
+import cloudinary.uploader
 import os
 import json
 import uuid
@@ -99,6 +100,13 @@ def add():
     final_cat = new_cat if new_cat else category
     image_url = ""
 
+  # Cloudinary Configuration
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    secure=True
+)
     # آپلود تصویر
     if file and file.filename:
         ext = file.filename.rsplit(".", 1)[-1].lower()
