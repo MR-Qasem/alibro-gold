@@ -1,170 +1,208 @@
 """
 پنل ادمین Flask
 ────────────────────────────────────────────
-مسیرها:
-  GET  /admin          → داشبورد + لیست محصولات
-  POST /admin/add      → اضافه کردن محصول جدید
-  POST /admin/delete   → حذف محصول
-  POST /admin/send     → ارسال محصول به کانال بله
-  GET  /admin/gold     → نمایش قیمت طلا لحظه‌ای
-
-ذخیره تصاویر جدید: Cloudinary
-ذخیره اطلاعات محصولات: Google Sheets
+تصاویر: Cloudinary
+محصولات: Google Sheets
+ارسال به کانال: بله (با multipart برای تصویر)
 """
 
-import json
-import logging
-import os
-import urllib.error
-import urllib.request
+import json, logging, os, io, urllib.error, urllib.request
 from functools import wraps
 
-import cloudinary
-import cloudinary.uploader
-from flask import (
-    Flask,
-    flash,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    send_from_directory,
-    session,
-    url_for,
-)
+import cloudinary, cloudinary.uploader
+from flask import (Flask, flash, jsonify, redirect, render_template,
+                   request, send_from_directory, session, url_for)
 from werkzeug.utils import secure_filename
 
 from sheets import get_all_products, get_categories, add_product, delete_product
 from gold_api import get_prices
 
-
 # ─────────────────────────────────────────────
-#  App & logging
-# ─────────────────────────────────────────────
-
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "change-this-secret-key")
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s",
+                    datefmt="%H:%M:%S")
+log = logging.getLogger(__name__)
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
-logger = logging.getLogger(__name__)
-
-# محدودیت حجم کل درخواست آپلود (۸ مگابایت)
-MAX_IMAGE_SIZE = 8 * 1024 * 1024
-app.config["MAX_CONTENT_LENGTH"] = MAX_IMAGE_SIZE
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 @app.errorhandler(413)
-def request_entity_too_large(_error):
-    flash("حجم تصویر بیش از حد مجاز است (حداکثر ۸ مگابایت).", "error")
+def too_large(_):
+    flash("حجم تصویر بیش از ۸ مگابایت است.", "error")
     return redirect(url_for("dashboard"))
 
-
-# ─────────────────────────────────────────────
-#  Environment variables
-# ─────────────────────────────────────────────
-
+# ─── env ──────────────────────────────────────
 BALE_TOKEN = os.getenv("BALE_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin123")
-BALE_API = f"https://tapi.bale.ai/bot{BALE_TOKEN}"
+BALE_API   = f"https://tapi.bale.ai/bot{BALE_TOKEN}"
 
-UPLOAD_FOLDER = "uploads"
-ALLOWED_EXT = {"png", "jpg", "jpeg", "webp"}
-ALLOWED_MIMETYPES = {"image/png", "image/jpeg", "image/webp"}
+ALLOWED_EXT  = {"png", "jpg", "jpeg", "webp"}
+ALLOWED_MIME = {"image/png", "image/jpeg", "image/webp"}
+os.makedirs("uploads", exist_ok=True)
 
-# این پوشه فقط برای سازگاری با تصاویر قدیمی نگه داشته شده است.
-# تصاویر جدید در این مسیر ذخیره نمی‌شوند.
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# ─── Cloudinary ───────────────────────────────
+CL_NAME   = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
+CL_KEY    = os.getenv("CLOUDINARY_API_KEY", "").strip()
+CL_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+CL_OK     = all([CL_NAME, CL_KEY, CL_SECRET])
 
-# پیکربندی Cloudinary در سطح ماژول انجام می‌شود، نه داخل route.
-CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
-CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
-CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()
-
-CLOUDINARY_CONFIGURED = all(
-    [CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET]
-)
-
-if CLOUDINARY_CONFIGURED:
-    cloudinary.config(
-        cloud_name=CLOUDINARY_CLOUD_NAME,
-        api_key=CLOUDINARY_API_KEY,
-        api_secret=CLOUDINARY_API_SECRET,
-        secure=True,
-    )
+if CL_OK:
+    cloudinary.config(cloud_name=CL_NAME, api_key=CL_KEY,
+                      api_secret=CL_SECRET, secure=True)
 else:
-    logger.warning(
-        "Cloudinary credentials are incomplete. Image uploads will be unavailable."
-    )
+    log.warning("Cloudinary credentials missing — uploads disabled")
 
 
 # ─────────────────────────────────────────────
 #  Helpers
 # ─────────────────────────────────────────────
 
-def _allowed_image(file):
-    """بررسی پسوند و MIME تصویر."""
-    original_name = secure_filename(file.filename or "")
-    if "." not in original_name:
+def _allowed(file) -> bool:
+    name = secure_filename(file.filename or "")
+    ext  = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    mime = (file.mimetype or "").lower()
+    return ext in ALLOWED_EXT and mime in ALLOWED_MIME
+
+
+def _upload_cloudinary(file):
+    """آپلود به Cloudinary → (url, public_id)"""
+    if not CL_OK:
+        raise RuntimeError("Cloudinary not configured")
+    r = cloudinary.uploader.upload(
+        file.stream, folder="gold-bot/products",
+        resource_type="image", unique_filename=True, overwrite=False)
+    url = r.get("secure_url", "")
+    if not url.startswith("https://"):
+        raise RuntimeError(f"Bad Cloudinary URL: {url}")
+    return url, r.get("public_id", "")
+
+
+def _bale_post_json(endpoint: str, payload: dict) -> dict:
+    """POST با JSON به بله"""
+    data = json.dumps(payload, ensure_ascii=False).encode()
+    req  = urllib.request.Request(
+        f"{BALE_API}/{endpoint}", data=data,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        log.error("Bale HTTP %s / %s: %s", endpoint, e.code, body)
+        return {"ok": False, "error": body}
+    except Exception as e:
+        log.error("Bale error / %s: %s", endpoint, e)
+        return {"ok": False, "error": str(e)}
+
+
+def _bale_send_photo_binary(chat_id: str, image_url: str, caption: str) -> bool:
+    """
+    تصویر را ابتدا دانلود می‌کند سپس با multipart/form-data به بله می‌فرستد.
+    این روش مطمئن‌ترین راه برای sendPhoto در بله است.
+    """
+    # دانلود تصویر از Cloudinary
+    try:
+        img_req = urllib.request.Request(image_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(img_req, timeout=20) as r:
+            img_data   = r.read()
+            img_ctype  = r.headers.get("Content-Type", "image/jpeg")
+    except Exception as e:
+        log.error("Could not download image from %s: %s", image_url, e)
         return False
 
-    extension = original_name.rsplit(".", 1)[-1].lower()
-    mimetype = (file.mimetype or "").lower()
+    # ساخت multipart body دستی (بدون کتابخانه اضافی)
+    boundary = b"----BaleFormBoundary7MA4YWxkTrZu0gW"
+    caption_bytes = caption.encode("utf-8")
+    chat_bytes    = chat_id.encode()
 
-    return extension in ALLOWED_EXT and mimetype in ALLOWED_MIMETYPES
+    # extension از content-type
+    ext_map = {"image/jpeg": "photo.jpg", "image/png": "photo.png", "image/webp": "photo.webp"}
+    filename = ext_map.get(img_ctype.split(";")[0].strip(), "photo.jpg")
 
-
-def _upload_image_to_cloudinary(file):
-    """
-    تصویر را مستقیماً از stream به Cloudinary می‌فرستد.
-    خروجی: (secure_url, public_id)
-    """
-    if not CLOUDINARY_CONFIGURED:
-        raise RuntimeError(
-            "Cloudinary is not configured. Check CLOUDINARY_CLOUD_NAME, "
-            "CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET."
-        )
-
-    result = cloudinary.uploader.upload(
-        file.stream,
-        folder="gold-bot/products",
-        resource_type="image",
-        use_filename=False,
-        unique_filename=True,
-        overwrite=False,
+    body = (
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="chat_id"\r\n\r\n' +
+        chat_bytes + b"\r\n"
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="caption"\r\n\r\n' +
+        caption_bytes + b"\r\n"
+        b"--" + boundary + b"\r\n"
+        b'Content-Disposition: form-data; name="photo"; filename="' +
+        filename.encode() + b'"\r\n'
+        b"Content-Type: " + img_ctype.encode() + b"\r\n\r\n" +
+        img_data + b"\r\n"
+        b"--" + boundary + b"--\r\n"
     )
 
-    image_url = result.get("secure_url")
-    public_id = result.get("public_id")
+    req = urllib.request.Request(
+        f"{BALE_API}/sendPhoto",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary.decode()}"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            res = json.loads(r.read())
+            if res.get("ok"):
+                log.info("sendPhoto OK → chat_id=%s", chat_id)
+                return True
+            log.error("sendPhoto not ok: %s", res)
+            return False
+    except urllib.error.HTTPError as e:
+        log.error("sendPhoto HTTP %s: %s", e.code, e.read().decode(errors="replace"))
+        return False
+    except Exception as e:
+        log.error("sendPhoto error: %s", e)
+        return False
 
-    if not image_url or not image_url.startswith("https://"):
-        raise RuntimeError("Cloudinary did not return a valid HTTPS image URL.")
 
-    return image_url, public_id
+def _send_to_bale(chat_id: str, text: str, image_url: str = None) -> bool:
+    if not BALE_TOKEN:
+        log.error("BALE_TOKEN missing")
+        return False
+    if not chat_id:
+        log.error("chat_id empty")
+        return False
+
+    if image_url:
+        # روش ۱: ارسال binary (مطمئن‌ترین)
+        ok = _bale_send_photo_binary(chat_id, image_url, text)
+        if not ok:
+            # روش ۲: fallback با URL مستقیم
+            log.info("Fallback: trying sendPhoto with URL")
+            res = _bale_post_json("sendPhoto", {
+                "chat_id": chat_id, "photo": image_url,
+                "caption": text, "parse_mode": "Markdown"})
+            ok = res.get("ok", False)
+        return ok
+    else:
+        res = _bale_post_json("sendMessage", {
+            "chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        return res.get("ok", False)
 
 
 # ─────────────────────────────────────────────
-#  Auth ساده با session
+#  Auth
 # ─────────────────────────────────────────────
 
 def login_required(f):
     @wraps(f)
-    def decorated(*args, **kwargs):
+    def d(*a, **kw):
         if not session.get("logged_in"):
             return redirect(url_for("login"))
-        return f(*args, **kwargs)
-    return decorated
+        return f(*a, **kw)
+    return d
 
-
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
         if request.form.get("password") == ADMIN_PASS:
             session["logged_in"] = True
             return redirect(url_for("dashboard"))
-        flash("❌ رمز عبور اشتباه است", "error")
-
+        flash("❌ رمز عبور اشتباه", "error")
     return render_template("login.html")
-
 
 @app.route("/logout")
 def logout():
@@ -173,240 +211,116 @@ def logout():
 
 
 # ─────────────────────────────────────────────
-#  داشبورد
+#  Routes
 # ─────────────────────────────────────────────
 
 @app.route("/admin")
 @app.route("/")
 @login_required
 def dashboard():
-    products = get_all_products()
-    categories = get_categories()
-    prices = get_prices()
+    return render_template("admin.html",
+        products=get_all_products(),
+        categories=get_categories(),
+        prices=get_prices())
 
-    return render_template(
-        "admin.html",
-        products=products,
-        categories=categories,
-        prices=prices,
-    )
-
-
-# ─────────────────────────────────────────────
-#  اضافه کردن محصول
-# ─────────────────────────────────────────────
 
 @app.route("/admin/add", methods=["POST"])
 @login_required
 def add():
-    name = request.form.get("name", "").strip()
-    category = request.form.get("category", "").strip()
-    new_cat = request.form.get("new_category", "").strip()
-    price = request.form.get("price", "").strip()
-    description = request.form.get("description", "").strip()
-    file = request.files.get("image")
+    name     = request.form.get("name","").strip()
+    category = request.form.get("category","").strip()
+    new_cat  = request.form.get("new_category","").strip()
+    price    = request.form.get("price","").strip()
+    desc     = request.form.get("description","").strip()
+    file     = request.files.get("image")
 
     if not name or not price:
         flash("❌ نام و قیمت الزامی است", "error")
         return redirect(url_for("dashboard"))
 
-    final_cat = new_cat if new_cat else category
-    image_url = ""
-    uploaded_public_id = None
+    final_cat  = new_cat if new_cat else category
+    image_url  = ""
+    public_id  = None
 
-    # اگر تصویری انتخاب شده باشد، ابتدا آن را روی Cloudinary آپلود می‌کنیم.
     if file and file.filename:
-        if not _allowed_image(file):
-            flash("❌ فرمت تصویر مجاز نیست (jpg, jpeg, png, webp)", "error")
+        if not _allowed(file):
+            flash("❌ فرمت مجاز: jpg, png, webp", "error")
             return redirect(url_for("dashboard"))
-
         try:
-            image_url, uploaded_public_id = _upload_image_to_cloudinary(file)
-            logger.info("Image uploaded to Cloudinary: %s", uploaded_public_id)
-
+            image_url, public_id = _upload_cloudinary(file)
+            log.info("Cloudinary upload OK: %s", public_id)
         except Exception:
-            logger.exception("Cloudinary image upload failed")
-            flash("❌ آپلود تصویر ناموفق بود؛ محصول ذخیره نشد.", "error")
+            log.exception("Cloudinary upload failed")
+            flash("❌ آپلود تصویر ناموفق", "error")
             return redirect(url_for("dashboard"))
 
-    # پس از آپلود موفق تصویر، اطلاعات محصول در Google Sheets ذخیره می‌شود.
     try:
-        ok = add_product(
-            name,
-            final_cat,
-            price,
-            description,
-            image_url,
-        )
+        ok = add_product(name, final_cat, price, desc, image_url)
     except Exception:
-        logger.exception("Saving product to Google Sheets failed")
+        log.exception("add_product failed")
         ok = False
 
     if ok:
-        flash(f"✅ محصول «{name}» با موفقیت اضافه شد", "success")
+        flash(f"✅ محصول «{name}» اضافه شد", "success")
     else:
-        # اگر ثبت محصول در شیت شکست خورد، تصویر آپلودشده را از Cloudinary پاک می‌کنیم
-        # تا فایل بلااستفاده در فضای ابری باقی نماند.
-        if uploaded_public_id:
-            try:
-                cloudinary.uploader.destroy(
-                    uploaded_public_id,
-                    resource_type="image",
-                )
-            except Exception:
-                logger.exception(
-                    "Could not clean up orphaned Cloudinary image: %s",
-                    uploaded_public_id,
-                )
-
-        flash("❌ خطا در ذخیره محصول در Google Sheets", "error")
+        if public_id:
+            try: cloudinary.uploader.destroy(public_id, resource_type="image")
+            except Exception: pass
+        flash("❌ خطا در ذخیره در Google Sheets", "error")
 
     return redirect(url_for("dashboard"))
 
-
-# ─────────────────────────────────────────────
-#  حذف محصول
-# ─────────────────────────────────────────────
 
 @app.route("/admin/delete", methods=["POST"])
 @login_required
 def delete():
-    product_id = request.form.get("id", "")
-    ok = delete_product(product_id)
-
-    if ok:
-        flash("✅ محصول حذف شد", "success")
-    else:
-        flash("❌ خطا در حذف محصول", "error")
-
+    ok = delete_product(request.form.get("id",""))
+    flash("✅ حذف شد" if ok else "❌ خطا در حذف", "success" if ok else "error")
     return redirect(url_for("dashboard"))
 
-
-# ─────────────────────────────────────────────
-#  ارسال محصول به کانال بله
-# ─────────────────────────────────────────────
 
 @app.route("/admin/send", methods=["POST"])
 @login_required
 def send_to_channel():
-    product_id = request.form.get("id", "")
+    pid      = request.form.get("id","")
     products = get_all_products()
-    product = next((p for p in products if str(p.get("id")) == product_id), None)
+    product  = next((p for p in products if str(p.get("id")) == pid), None)
 
     if not product:
         flash("❌ محصول یافت نشد", "error")
         return redirect(url_for("dashboard"))
 
+    if not CHANNEL_ID:
+        flash("❌ CHANNEL_ID تنظیم نشده", "error")
+        return redirect(url_for("dashboard"))
+
     caption = (
-        f"🛍 *{product.get('name', '')}*\n"
-        f"📂 دسته: {product.get('category', '')}\n"
-        f"💰 قیمت: {product.get('price', '')} تومان\n\n"
-        f"{product.get('description', '')}\n\n"
+        f"🛍 *{product.get('name','')}*\n"
+        f"📂 دسته: {product.get('category','')}\n"
+        f"💰 قیمت: {product.get('price','')} تومان\n\n"
+        f"{product.get('description','')}\n\n"
         "📲 برای استعلام قیمت روز طلا ربات ما را دنبال کنید"
     )
 
-    if not CHANNEL_ID:
-        logger.error("CHANNEL_ID is not configured.")
-        flash("❌ شناسه کانال در تنظیمات سرور تعریف نشده است.", "error")
-        return redirect(url_for("dashboard"))
+    img = product.get("image_url") or None
+    log.info("Sending product id=%s to channel %s (image=%s)", pid, CHANNEL_ID, bool(img))
+    ok = _send_to_bale(CHANNEL_ID, caption, img)
 
-    result = _send_to_bale(
-        CHANNEL_ID,
-        caption,
-        product.get("image_url") or None,
-    )
-
-    if result:
-        flash("✅ محصول به کانال ارسال شد", "success")
-    else:
-        flash("❌ ارسال به کانال ناموفق بود؛ لاگ Render را بررسی کن.", "error")
-
+    flash("✅ به کانال ارسال شد" if ok else "❌ ارسال ناموفق — لاگ Render را ببین", 
+          "success" if ok else "error")
     return redirect(url_for("dashboard"))
 
-
-def _send_to_bale(chat_id: str, text: str, image_url: str = None) -> bool:
-    """ارسال متن یا تصویر به Bale و ثبت پاسخ خطا در لاگ."""
-    if not BALE_TOKEN:
-        logger.error("BALE_TOKEN is not configured.")
-        return False
-
-    endpoint = "sendPhoto" if image_url else "sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "parse_mode": "Markdown",
-    }
-
-    if image_url:
-        payload["photo"] = image_url
-        payload["caption"] = text
-    else:
-        payload["text"] = text
-
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    url = f"{BALE_API}/{endpoint}"
-
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            response_body = response.read().decode("utf-8", errors="replace")
-            result = json.loads(response_body)
-
-            if not result.get("ok", False):
-                logger.error("Bale API returned an unsuccessful response: %s", response_body)
-                return False
-
-            return True
-
-    except urllib.error.HTTPError as error:
-        error_body = error.read().decode("utf-8", errors="replace")
-        logger.error(
-            "Bale HTTP error %s: %s",
-            error.code,
-            error_body,
-        )
-        return False
-
-    except urllib.error.URLError as error:
-        logger.error("Bale connection error: %s", error)
-        return False
-
-    except json.JSONDecodeError:
-        logger.exception("Bale API returned invalid JSON.")
-        return False
-
-    except Exception:
-        logger.exception("Unexpected error while sending message to Bale.")
-        return False
-
-
-# ─────────────────────────────────────────────
-#  API endpoint برای قیمت طلا (AJAX)
-# ─────────────────────────────────────────────
 
 @app.route("/api/gold")
 @login_required
 def api_gold():
-    prices = get_prices()
-    return jsonify(prices or {})
+    return jsonify(get_prices() or {})
 
-
-# ─────────────────────────────────────────────
-#  سرو کردن تصاویر قدیمی
-# ─────────────────────────────────────────────
-# این route فقط برای فایل‌هایی است که قبلاً در uploads ذخیره شده‌اند.
-# تصاویر جدید از Cloudinary ارائه می‌شوند.
 
 @app.route("/uploads/<filename>")
 def uploaded_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+    return send_from_directory("uploads", filename)
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
