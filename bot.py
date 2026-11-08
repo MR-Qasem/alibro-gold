@@ -43,7 +43,7 @@ def _post(endpoint: str, payload: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read())
     except Exception as e:
         log.error(f"[POST {endpoint}] {e}")
@@ -56,7 +56,7 @@ def _get(endpoint: str, params: dict = None) -> dict:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read())
     except Exception as e:
         log.error(f"[GET {endpoint}] {e}")
@@ -230,6 +230,20 @@ def scheduler_loop():
                     log.warning(f"⚠️ ارسال به کانال ناموفق: {result}")
 
 
+
+def _get_long(endpoint: str, params: dict = None) -> dict:
+    """Long-polling GET — urlopen timeout باید از polling timeout بیشتر باشه"""
+    url = f"{BALE_API}/{endpoint}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=35) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        log.error(f"[GET_LONG {endpoint}] {e}")
+        return {}
+
 # ───────────────────────────────────────────
 #  حلقه اصلی polling
 # ───────────────────────────────────────────
@@ -252,7 +266,7 @@ def run_bot():
     offset = 0
     while True:
         try:
-            result = _get("getUpdates", {"offset": offset, "timeout": 30})
+            result = _get_long("getUpdates", {"offset": offset, "timeout": 20})
             updates = result.get("result", [])
             for update in updates:
                 try:
